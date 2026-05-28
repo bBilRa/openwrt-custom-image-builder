@@ -25,34 +25,68 @@ jobs:
       
       - name: Extract and setup imagebuilder
         run: |
-          # Распаковываем архив
           tar -xf openwrt-imagebuilder-*.tar.xz
           
-          # Находим ТОЛЬКО директорию (исключая файлы)
           IMAGEBUILDER_DIR=$(find . -maxdepth 1 -type d -name "openwrt-imagebuilder-*" | head -1)
           echo "Found imagebuilder directory: $IMAGEBUILDER_DIR"
           
-          # Проверяем, что директория существует
           if [ ! -d "$IMAGEBUILDER_DIR" ]; then
             echo "ERROR: Imagebuilder directory not found!"
             exit 1
           fi
           
-          # Переименовываем директорию
           mv "$IMAGEBUILDER_DIR" imagebuilder
           echo "Successfully renamed to imagebuilder"
+      
+      - name: Check available profiles
+        run: |
+          cd imagebuilder
+          echo "Running make info to get available profiles..."
+          make info
           
-          # Проверяем результат
-          echo "imagebuilder directory contents:"
-          ls -la imagebuilder/ | head -20
+          echo ""
+          echo "=== Looking for Cudy profiles ==="
+          make info | grep -i cudy || echo "No cudy profiles found!"
+          
+          echo ""
+          echo "=== Looking for TR1200 profiles ==="
+          make info | grep -i tr1200 || echo "No TR1200 profiles found!"
+          
+          echo ""
+          echo "=== All available profiles containing '1200' ==="
+          make info | grep 1200 || echo "No profiles with 1200 found!"
+      
+      - name: Get exact profile name
+        id: profile
+        run: |
+          cd imagebuilder
+          
+          # Получаем точное имя профиля
+          PROFILE=$(make info | grep -i "tr1200" | head -1 | awk '{print $2}')
+          
+          if [ -z "$PROFILE" ]; then
+            echo "Searching for alternative profile names..."
+            # Пробуем разные варианты
+            PROFILE=$(make info | grep -E "(cudy.*1200|tr1200)" -i | head -1 | awk '{print $2}')
+          fi
+          
+          if [ -z "$PROFILE" ]; then
+            echo "ERROR: Could not find profile for Cudy TR1200!"
+            echo "All available profiles:"
+            make info | head -50
+            exit 1
+          fi
+          
+          echo "Found profile: $PROFILE"
+          echo "profile=$PROFILE" >> $GITHUB_OUTPUT
       
       - name: Build firmware
         run: |
           cd imagebuilder
           
-          echo "Starting firmware build..."
+          echo "Building with profile: ${{ steps.profile.outputs.profile }}"
           make image \
-            PROFILE="cudy,tr1200-v1" \
+            PROFILE="${{ steps.profile.outputs.profile }}" \
             PACKAGES="kmod-usb-core kmod-usb2 kmod-usb-ohci kmod-usb-net \
               kmod-usb-net-cdc-ether kmod-usb-net-rndis kmod-usb-serial \
               kmod-usb-serial-option kmod-usb-serial-wwan kmod-usb-wdm \
@@ -69,11 +103,9 @@ jobs:
           echo "Collecting firmware files..."
           mkdir -p firmware-output
           
-          # Копируем все собранные прошивки
-          find output/ -name "*.bin" -exec cp {} firmware-output/ \;
-          find output/ -name "*.manifest" -exec cp {} firmware-output/ \;
+          find output/ -name "*.bin" -exec cp {} firmware-output/ \; 2>/dev/null || true
+          find output/ -name "*.manifest" -exec cp {} firmware-output/ \; 2>/dev/null || true
           
-          # Создаем информационный файл
           echo "OpenWrt Custom Build" > firmware-output/README.txt
           echo "Device: Cudy TR1200 v1" >> firmware-output/README.txt
           echo "Target: ramips/mt76x8" >> firmware-output/README.txt
@@ -85,7 +117,7 @@ jobs:
           echo "- USB storage support (ext4, vfat, exfat)" >> firmware-output/README.txt
           
           echo "Files collected:"
-          ls -la firmware-output/
+          ls -la firmware-output/ || echo "WARNING: No firmware files found!"
       
       - name: Upload firmware
         uses: actions/upload-artifact@v4
