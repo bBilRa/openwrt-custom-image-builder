@@ -33,7 +33,7 @@ jobs:
               usb-modeswitch \
               luci-proto-3g luci-proto-ncm \
               comgt comgt-ncm \
-              xray-core \
+              xray-core luci-app-xray \
               luci \
               -ip6tables -kmod-ip6tables -kmod-ipv6 -ipv6helper \
               -odhcp6c -odhcpd-ipv6only \
