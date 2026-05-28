@@ -1,9 +1,7 @@
-name: Build OpenWrt for Cudy TR1200 v1 - VLESS + USB Modem
+name: Build OpenWrt TR1200 - Ultra Minimal VLESS + USB
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
 
 jobs:
   build:
@@ -12,114 +10,52 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Setup build environment
+      - name: Build ultra minimal firmware
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential libncurses-dev zlib1g-dev \
             gawk git gettext libssl-dev xsltproc wget unzip python3 file libelf-dev
-      
-      - name: Download and prepare Image Builder
-        run: |
+          
           wget -q https://downloads.openwrt.org/releases/23.05.4/targets/ramips/mt76x8/openwrt-imagebuilder-23.05.4-ramips-mt76x8.Linux-x86_64.tar.xz
           mkdir -p imagebuilder
           tar -xf openwrt-imagebuilder-*.tar.xz --strip-components=1 -C imagebuilder/
-          rm openwrt-imagebuilder-*.tar.xz
-      
-      - name: Find profile and check default packages
-        run: |
-          cd imagebuilder
-          echo "=== Searching for Cudy TR1200 profile ==="
-          make info | grep -i "cudy\|tr1200" || echo "Profile not found in standard format"
-          
-          echo ""
-          echo "=== All profiles with '1200' in name ==="
-          make info | grep "1200"
-          
-          echo ""
-          echo "=== Default packages for first matching profile ==="
-          PROFILE=$(make info | grep -i "tr1200" | head -1 | cut -d: -f1)
-          if [ -n "$PROFILE" ]; then
-            echo "Profile: $PROFILE"
-            make info | grep -A 30 "^$PROFILE:"
-          fi
-      
-      - name: Build firmware with Xray and USB modem support
-        run: |
           cd imagebuilder
           
-          # Получаем имя профиля
           PROFILE=$(make info | grep -i "tr1200" | head -1 | cut -d: -f1)
           
-          if [ -z "$PROFILE" ]; then
-            echo "ERROR: Profile not found!"
-            echo "Available profiles:"
-            make info | head -50
-            exit 1
-          fi
-          
-          echo "Building with profile: $PROFILE"
-          
-          # Исключаем ненужные пакеты для освобождения места
-          DISABLE_PACKAGES=""
-          # Удаляем поддержку IPv6 (экономит ~500KB)
-          DISABLE_PACKAGES="$DISABLE_PACKAGES -ip6tables -kmod-ip6tables -ip6tables-extra"
-          DISABLE_PACKAGES="$DISABLE_PACKAGES -kmod-ipv6 -ipv6helper -odhcp6c -odhcpd-ipv6only"
-          # Удаляем PPP и PPPoE (если не нужны)
-          DISABLE_PACKAGES="$DISABLE_PACKAGES -ppp -ppp-mod-pppoe -ppp-mod-pppol2tp -ppp-mod-pptp"
-          # Удаляем ненужные файловые системы
-          DISABLE_PACKAGES="$DISABLE_PACKAGES -kmod-fs-ntfs -kmod-fs-exfat"
-          # Удаляем дополнительные языки и темы
-          DISABLE_PACKAGES="$DISABLE_PACKAGES -luci-i18n-base-ru -luci-i18n-firewall-ru"
-          
-          # Добавляем нужные пакеты
-          PACKAGES=""
-          
-          # USB модем
-          PACKAGES="$PACKAGES kmod-usb-core kmod-usb2 kmod-usb-ohci"
-          PACKAGES="$PACKAGES kmod-usb-net kmod-usb-net-cdc-ether kmod-usb-net-rndis"
-          PACKAGES="$PACKAGES kmod-usb-serial kmod-usb-serial-option kmod-usb-serial-wwan"
-          PACKAGES="$PACKAGES usb-modeswitch"
-          PACKAGES="$PACKAGES luci-proto-3g luci-proto-qmi luci-proto-ncm"
-          PACKAGES="$PACKAGES comgt comgt-ncm"
-          
-          # Файловые системы (только необходимые)
-          PACKAGES="$PACKAGES kmod-fs-ext4 kmod-fs-vfat block-mount"
-          
-          # Xray-core и LuCI интерфейс
-          PACKAGES="$PACKAGES xray-core luci-app-xray"
-          
-          # LuCI (без SSL для экономии места - можно включить позже)
-          PACKAGES="$PACKAGES luci luci-ssl"
-          
-          # Полезные утилиты
-          PACKAGES="$PACKAGES curl wget-ssl"
-          
-          echo "Disabling packages: $DISABLE_PACKAGES"
-          echo "Adding packages: $PACKAGES"
-          
-          # Сборка с исключением и добавлением пакетов
+          # Ультра-минимальная сборка
           make image \
             PROFILE="$PROFILE" \
-            PACKAGES="$PACKAGES $DISABLE_PACKAGES" \
-            BIN_DIR="${{ github.workspace }}/output"
-          
-          echo "Build exit code: $?"
-      
-      - name: Check build result
-        run: |
-          echo "=== Build output ==="
-          if [ -d "output" ]; then
-            find output/ -type f \( -name "*.bin" -o -name "*.manifest" \) -exec ls -lh {} \;
-          else
-            echo "ERROR: No output directory found!"
-            echo "Checking for error logs:"
-            find . -name "*.log" -exec tail -20 {} \;
-            exit 1
-          fi
+            PACKAGES="\
+              kmod-usb-core kmod-usb2 kmod-usb-ohci \
+              kmod-usb-net kmod-usb-net-cdc-ether kmod-usb-net-rndis \
+              kmod-usb-serial kmod-usb-serial-option \
+              usb-modeswitch \
+              luci-proto-3g luci-proto-ncm \
+              comgt comgt-ncm \
+              xray-core \
+              luci \
+              -ip6tables -kmod-ip6tables -kmod-ipv6 -ipv6helper \
+              -odhcp6c -odhcpd-ipv6only \
+              -ppp -ppp-mod-pppoe -kmod-ppp -kmod-pppoe \
+              -luci-i18n-* \
+              -kmod-nls-* \
+              -wpad-basic-wolfssl \
+              -dnsmasq \
+              -firewall4 \
+              -nftables-json \
+              -kmod-nft-offload \
+              -odhcpd \
+              -uhttpd \
+              -rpcd \
+              dnsmasq-full \
+              uhttpd-mod-ubus \
+            " \
+            BIN_DIR="${{ github.workspace }}/firmware"
       
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: cudy-tr1200-v1-vless-usb-modem
-          path: output/
+          name: tr1200-ultra-minimal-vless-usb
+          path: firmware/
           retention-days: 30
