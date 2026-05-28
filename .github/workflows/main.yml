@@ -35,6 +35,7 @@ jobs:
               comgt comgt-ncm \
               xray-core luci-app-xray \
               luci \
+              -opkg \
               -ip6tables -kmod-ip6tables -kmod-ipv6 -ipv6helper \
               -odhcp6c -odhcpd-ipv6only \
               -ppp -ppp-mod-pppoe -kmod-ppp -kmod-pppoe \
