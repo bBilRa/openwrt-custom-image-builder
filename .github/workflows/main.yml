@@ -1,53 +1,131 @@
-# Целевая платформа и устройство
-CONFIG_TARGET_ramips=y
-CONFIG_TARGET_ramips_mt76x8=y
-CONFIG_TARGET_ramips_mt76x8_DEVICE_cudy_tr1200-v1=y
+name: Build OpenWrt Custom Image
 
-# Базовые пакеты (будут включены по умолчанию)
-CONFIG_PACKAGE_kmod-usb-core=y
-CONFIG_PACKAGE_kmod-usb2=y
-CONFIG_PACKAGE_kmod-usb-ohci=y
-CONFIG_PACKAGE_kmod-usb-net=y
-CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
-CONFIG_PACKAGE_kmod-usb-net-rndis=y
-CONFIG_PACKAGE_kmod-usb-serial=y
-CONFIG_PACKAGE_kmod-usb-serial-option=y
-CONFIG_PACKAGE_kmod-usb-serial-wwan=y
-CONFIG_PACKAGE_kmod-usb-wdm=y
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target device (e.g., ramips/mt76x8)'
+        required: true
+        default: 'ramips/mt76x8'
+      device:
+        description: 'Device name (e.g., cudy,tr1200-v1)'
+        required: true
+        default: 'cudy,tr1200-v1'
+      packages:
+        description: 'Additional packages to include'
+        required: false
+        default: ''
 
-# Поддержка модемов
-CONFIG_PACKAGE_usb-modeswitch=y
-CONFIG_PACKAGE_comgt=y
-CONFIG_PACKAGE_comgt-ncm=y
-CONFIG_PACKAGE_luci-proto-3g=y
-CONFIG_PACKAGE_luci-proto-qmi=y
-CONFIG_PACKAGE_luci-proto-ncm=y
-CONFIG_PACKAGE_luci-proto-modemmanager=y
-CONFIG_PACKAGE_modemmanager=y
+env:
+  REPO_URL: https://downloads.openwrt.org/releases/23.05.4/targets/ramips/mt76x8/
+  IMAGE_BUILDER: openwrt-imagebuilder-23.05.4-ramips-mt76x8.Linux-x86_64.tar.xz
 
-# Поддержка USB-накопителей
-CONFIG_PACKAGE_kmod-fs-ext4=y
-CONFIG_PACKAGE_kmod-fs-vfat=y
-CONFIG_PACKAGE_kmod-fs-exfat=y
-CONFIG_PACKAGE_kmod-fs-ntfs=y
-CONFIG_PACKAGE_block-mount=y
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-# Xray-core для VLESS
-CONFIG_PACKAGE_xray-core=y
-CONFIG_PACKAGE_luci-app-xray=y
+      - name: Set up build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev \
+            zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3 \
+            file libelf-dev
 
-# Альтернатива - Sing-box (тоже поддерживает VLESS)
-# CONFIG_PACKAGE_sing-box=y
-# CONFIG_PACKAGE_luci-app-sing-box=y
+      - name: Download Image Builder
+        run: |
+          wget ${REPO_URL}${IMAGE_BUILDER}
+          tar -xf ${IMAGE_BUILDER}
+          mv openwrt-imagebuilder-* imagebuilder
 
-# Дополнительные полезные пакеты
-CONFIG_PACKAGE_luci=y
-CONFIG_PACKAGE_luci-ssl=y
-CONFIG_PACKAGE_luci-app-statistics=y
-CONFIG_PACKAGE_luci-app-commands=y
-CONFIG_PACKAGE_curl=y
-CONFIG_PACKAGE_wget=y
-CONFIG_PACKAGE_htop=y
+      - name: Create package list
+        id: packages
+        run: |
+          # Базовые пакеты
+          BASE_PACKAGES="kmod-usb-core kmod-usb2 kmod-usb-ohci kmod-usb-net"
+          BASE_PACKAGES="$BASE_PACKAGES kmod-usb-net-cdc-ether kmod-usb-net-rndis"
+          BASE_PACKAGES="$BASE_PACKAGES kmod-usb-serial kmod-usb-serial-option"
+          BASE_PACKAGES="$BASE_PACKAGES kmod-usb-serial-wwan kmod-usb-wdm"
+          
+          # Поддержка модемов
+          MODEM_PACKAGES="usb-modeswitch comgt comgt-ncm"
+          MODEM_PACKAGES="$MODEM_PACKAGES luci-proto-3g luci-proto-qmi luci-proto-ncm"
+          MODEM_PACKAGES="$MODEM_PACKAGES luci-proto-modemmanager modemmanager"
+          
+          # Файловые системы USB
+          FS_PACKAGES="kmod-fs-ext4 kmod-fs-vfat kmod-fs-exfat kmod-fs-ntfs block-mount"
+          
+          # VLESS через Xray
+          VLESS_PACKAGES="xray-core luci-app-xray"
+          
+          # Дополнительные пакеты
+          EXTRA_PACKAGES="luci luci-ssl curl wget htop luci-app-statistics"
+          
+          # Сборка полного списка
+          ALL_PACKAGES="$BASE_PACKAGES $MODEM_PACKAGES $FS_PACKAGES $VLESS_PACKAGES $EXTRA_PACKAGES"
+          
+          # Добавляем пользовательские пакеты, если указаны
+          if [ -n "${{ github.event.inputs.packages }}" ]; then
+            ALL_PACKAGES="$ALL_PACKAGES ${{ github.event.inputs.packages }}"
+          fi
+          
+          echo "packages=$ALL_PACKAGES" >> $GITHUB_OUTPUT
 
-# Сжатие прошивки
-CONFIG_TARGET_IMAGES_GZIP=y
+      - name: Build firmware
+        run: |
+          cd imagebuilder
+          
+          # Формируем команду сборки
+          BUILD_CMD="make image PROFILE=${{ github.event.inputs.device }}"
+          BUILD_CMD="$BUILD_CMD PACKAGES=\"${{ steps.packages.outputs.packages }}\""
+          BUILD_CMD="$BUILD_CMD BIN_DIR=bin"
+          
+          echo "Building with command: $BUILD_CMD"
+          eval $BUILD_CMD
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p output
+          # Копируем все файлы прошивки
+          cp imagebuilder/bin/targets/*/*/*-sysupgrade.bin output/ 2>/dev/null || true
+          cp imagebuilder/bin/targets/*/*/*-factory.bin output/ 2>/dev/null || true
+          cp imagebuilder/bin/targets/*/*/*-initramfs.bin output/ 2>/dev/null || true
+          
+          # Создаем манифест с установленными пакетами
+          if [ -f imagebuilder/bin/targets/*/*/*-manifest.json ]; then
+            cp imagebuilder/bin/targets/*/*/*-manifest.json output/
+          fi
+          
+          # Создаем информационный файл
+          echo "Build Information:" > output/build-info.txt
+          echo "Date: $(date)" >> output/build-info.txt
+          echo "Target: ${{ github.event.inputs.target }}" >> output/build-info.txt
+          echo "Device: ${{ github.event.inputs.device }}" >> output/build-info.txt
+          echo "Packages: ${{ steps.packages.outputs.packages }}" >> output/build-info.txt
+          
+          ls -la output/
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-${{ github.event.inputs.device }}-firmware
+          path: output/
+          retention-days: 30
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_id }}
+          name: Build ${{ github.event.inputs.device }} - ${{ github.run_id }}
+          files: output/*
+          body: |
+            ## OpenWrt Custom Build
+            
+            - **Target:** ${{ github.event.inputs.target }}
+            - **Device:** ${{ github.event.inputs.device }}
+            - **Build Date:** $(date)
+            
+            ### Included Packages:
