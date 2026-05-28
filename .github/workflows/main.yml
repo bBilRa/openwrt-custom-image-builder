@@ -21,30 +21,36 @@ jobs:
       - name: Download OpenWrt Image Builder
         run: |
           wget https://downloads.openwrt.org/releases/23.05.4/targets/ramips/mt76x8/openwrt-imagebuilder-23.05.4-ramips-mt76x8.Linux-x86_64.tar.xz
-          echo "Archive downloaded, extracting..."
-          tar -xf openwrt-imagebuilder-*.tar.xz
-          echo "Extraction completed. Current directory contents:"
-          ls -la
+          echo "Download completed"
       
-      - name: Find and rename imagebuilder directory
+      - name: Extract and setup imagebuilder
         run: |
-          # Находим точное имя распакованной директории
-          IMAGEBUILDER_DIR=$(ls -d openwrt-imagebuilder-*)
+          # Распаковываем архив
+          tar -xf openwrt-imagebuilder-*.tar.xz
+          
+          # Находим ТОЛЬКО директорию (исключая файлы)
+          IMAGEBUILDER_DIR=$(find . -maxdepth 1 -type d -name "openwrt-imagebuilder-*" | head -1)
           echo "Found imagebuilder directory: $IMAGEBUILDER_DIR"
           
-          # Переименовываем в 'imagebuilder' для удобства
-          mv "$IMAGEBUILDER_DIR" imagebuilder
-          echo "Renamed to imagebuilder"
+          # Проверяем, что директория существует
+          if [ ! -d "$IMAGEBUILDER_DIR" ]; then
+            echo "ERROR: Imagebuilder directory not found!"
+            exit 1
+          fi
           
-          # Проверяем содержимое
-          echo "imagebuilder contents:"
-          ls -la imagebuilder/
+          # Переименовываем директорию
+          mv "$IMAGEBUILDER_DIR" imagebuilder
+          echo "Successfully renamed to imagebuilder"
+          
+          # Проверяем результат
+          echo "imagebuilder directory contents:"
+          ls -la imagebuilder/ | head -20
       
       - name: Build firmware
         run: |
           cd imagebuilder
           
-          echo "Building firmware for cudy,tr1200-v1..."
+          echo "Starting firmware build..."
           make image \
             PROFILE="cudy,tr1200-v1" \
             PACKAGES="kmod-usb-core kmod-usb2 kmod-usb-ohci kmod-usb-net \
@@ -56,22 +62,34 @@ jobs:
               xray-core luci-app-xray luci luci-ssl curl wget htop" \
             BIN_DIR="${{ github.workspace }}/output"
           
-          echo "Build completed!"
+          echo "Build completed successfully!"
       
-      - name: Check build results
+      - name: Collect firmware files
         run: |
-          echo "Checking output directory..."
-          if [ -d "output" ]; then
-            echo "Output directory contents:"
-            find output/ -type f -name "*.bin" -o -name "*.manifest"
-          else
-            echo "ERROR: No output directory found!"
-            exit 1
-          fi
+          echo "Collecting firmware files..."
+          mkdir -p firmware-output
+          
+          # Копируем все собранные прошивки
+          find output/ -name "*.bin" -exec cp {} firmware-output/ \;
+          find output/ -name "*.manifest" -exec cp {} firmware-output/ \;
+          
+          # Создаем информационный файл
+          echo "OpenWrt Custom Build" > firmware-output/README.txt
+          echo "Device: Cudy TR1200 v1" >> firmware-output/README.txt
+          echo "Target: ramips/mt76x8" >> firmware-output/README.txt
+          echo "Build date: $(date)" >> firmware-output/README.txt
+          echo "" >> firmware-output/README.txt
+          echo "Included packages:" >> firmware-output/README.txt
+          echo "- USB modem support (CDC, RNDIS, QMI, NCM)" >> firmware-output/README.txt
+          echo "- VLESS protocol (Xray-core)" >> firmware-output/README.txt
+          echo "- USB storage support (ext4, vfat, exfat)" >> firmware-output/README.txt
+          
+          echo "Files collected:"
+          ls -la firmware-output/
       
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: cudy-tr1200-v1-firmware
-          path: output/**
+          path: firmware-output/
           retention-days: 30
