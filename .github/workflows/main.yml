@@ -1,131 +1,77 @@
-name: Build OpenWrt Custom Image
+name: Build OpenWrt for Cudy TR1200 v1
 
 on:
   workflow_dispatch:
-    inputs:
-      target:
-        description: 'Target device (e.g., ramips/mt76x8)'
-        required: true
-        default: 'ramips/mt76x8'
-      device:
-        description: 'Device name (e.g., cudy,tr1200-v1)'
-        required: true
-        default: 'cudy,tr1200-v1'
-      packages:
-        description: 'Additional packages to include'
-        required: false
-        default: ''
-
-env:
-  REPO_URL: https://downloads.openwrt.org/releases/23.05.4/targets/ramips/mt76x8/
-  IMAGE_BUILDER: openwrt-imagebuilder-23.05.4-ramips-mt76x8.Linux-x86_64.tar.xz
+  push:
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up build environment
+      - uses: actions/checkout@v4
+      
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev \
-            zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3 \
-            file libelf-dev
-
-      - name: Download Image Builder
+          sudo apt-get install -y build-essential libncurses-dev zlib1g-dev \
+            gawk git gettext libssl-dev xsltproc wget unzip python3 file libelf-dev
+      
+      - name: Download OpenWrt Image Builder
         run: |
-          wget ${REPO_URL}${IMAGE_BUILDER}
-          tar -xf ${IMAGE_BUILDER}
-          mv openwrt-imagebuilder-* imagebuilder
-
-      - name: Create package list
-        id: packages
+          wget https://downloads.openwrt.org/releases/23.05.4/targets/ramips/mt76x8/openwrt-imagebuilder-23.05.4-ramips-mt76x8.Linux-x86_64.tar.xz
+          echo "Archive downloaded, extracting..."
+          tar -xf openwrt-imagebuilder-*.tar.xz
+          echo "Extraction completed. Current directory contents:"
+          ls -la
+      
+      - name: Find and rename imagebuilder directory
         run: |
-          # Базовые пакеты
-          BASE_PACKAGES="kmod-usb-core kmod-usb2 kmod-usb-ohci kmod-usb-net"
-          BASE_PACKAGES="$BASE_PACKAGES kmod-usb-net-cdc-ether kmod-usb-net-rndis"
-          BASE_PACKAGES="$BASE_PACKAGES kmod-usb-serial kmod-usb-serial-option"
-          BASE_PACKAGES="$BASE_PACKAGES kmod-usb-serial-wwan kmod-usb-wdm"
+          # Находим точное имя распакованной директории
+          IMAGEBUILDER_DIR=$(ls -d openwrt-imagebuilder-*)
+          echo "Found imagebuilder directory: $IMAGEBUILDER_DIR"
           
-          # Поддержка модемов
-          MODEM_PACKAGES="usb-modeswitch comgt comgt-ncm"
-          MODEM_PACKAGES="$MODEM_PACKAGES luci-proto-3g luci-proto-qmi luci-proto-ncm"
-          MODEM_PACKAGES="$MODEM_PACKAGES luci-proto-modemmanager modemmanager"
+          # Переименовываем в 'imagebuilder' для удобства
+          mv "$IMAGEBUILDER_DIR" imagebuilder
+          echo "Renamed to imagebuilder"
           
-          # Файловые системы USB
-          FS_PACKAGES="kmod-fs-ext4 kmod-fs-vfat kmod-fs-exfat kmod-fs-ntfs block-mount"
-          
-          # VLESS через Xray
-          VLESS_PACKAGES="xray-core luci-app-xray"
-          
-          # Дополнительные пакеты
-          EXTRA_PACKAGES="luci luci-ssl curl wget htop luci-app-statistics"
-          
-          # Сборка полного списка
-          ALL_PACKAGES="$BASE_PACKAGES $MODEM_PACKAGES $FS_PACKAGES $VLESS_PACKAGES $EXTRA_PACKAGES"
-          
-          # Добавляем пользовательские пакеты, если указаны
-          if [ -n "${{ github.event.inputs.packages }}" ]; then
-            ALL_PACKAGES="$ALL_PACKAGES ${{ github.event.inputs.packages }}"
-          fi
-          
-          echo "packages=$ALL_PACKAGES" >> $GITHUB_OUTPUT
-
+          # Проверяем содержимое
+          echo "imagebuilder contents:"
+          ls -la imagebuilder/
+      
       - name: Build firmware
         run: |
           cd imagebuilder
           
-          # Формируем команду сборки
-          BUILD_CMD="make image PROFILE=${{ github.event.inputs.device }}"
-          BUILD_CMD="$BUILD_CMD PACKAGES=\"${{ steps.packages.outputs.packages }}\""
-          BUILD_CMD="$BUILD_CMD BIN_DIR=bin"
+          echo "Building firmware for cudy,tr1200-v1..."
+          make image \
+            PROFILE="cudy,tr1200-v1" \
+            PACKAGES="kmod-usb-core kmod-usb2 kmod-usb-ohci kmod-usb-net \
+              kmod-usb-net-cdc-ether kmod-usb-net-rndis kmod-usb-serial \
+              kmod-usb-serial-option kmod-usb-serial-wwan kmod-usb-wdm \
+              usb-modeswitch comgt comgt-ncm luci-proto-3g luci-proto-qmi \
+              luci-proto-ncm luci-proto-modemmanager modemmanager \
+              kmod-fs-ext4 kmod-fs-vfat kmod-fs-exfat block-mount \
+              xray-core luci-app-xray luci luci-ssl curl wget htop" \
+            BIN_DIR="${{ github.workspace }}/output"
           
-          echo "Building with command: $BUILD_CMD"
-          eval $BUILD_CMD
-
-      - name: Prepare artifacts
+          echo "Build completed!"
+      
+      - name: Check build results
         run: |
-          mkdir -p output
-          # Копируем все файлы прошивки
-          cp imagebuilder/bin/targets/*/*/*-sysupgrade.bin output/ 2>/dev/null || true
-          cp imagebuilder/bin/targets/*/*/*-factory.bin output/ 2>/dev/null || true
-          cp imagebuilder/bin/targets/*/*/*-initramfs.bin output/ 2>/dev/null || true
-          
-          # Создаем манифест с установленными пакетами
-          if [ -f imagebuilder/bin/targets/*/*/*-manifest.json ]; then
-            cp imagebuilder/bin/targets/*/*/*-manifest.json output/
+          echo "Checking output directory..."
+          if [ -d "output" ]; then
+            echo "Output directory contents:"
+            find output/ -type f -name "*.bin" -o -name "*.manifest"
+          else
+            echo "ERROR: No output directory found!"
+            exit 1
           fi
-          
-          # Создаем информационный файл
-          echo "Build Information:" > output/build-info.txt
-          echo "Date: $(date)" >> output/build-info.txt
-          echo "Target: ${{ github.event.inputs.target }}" >> output/build-info.txt
-          echo "Device: ${{ github.event.inputs.device }}" >> output/build-info.txt
-          echo "Packages: ${{ steps.packages.outputs.packages }}" >> output/build-info.txt
-          
-          ls -la output/
-
-      - name: Upload firmware artifacts
+      
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt-${{ github.event.inputs.device }}-firmware
-          path: output/
+          name: cudy-tr1200-v1-firmware
+          path: output/**
           retention-days: 30
-
-      - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: build-${{ github.run_id }}
-          name: Build ${{ github.event.inputs.device }} - ${{ github.run_id }}
-          files: output/*
-          body: |
-            ## OpenWrt Custom Build
-            
-            - **Target:** ${{ github.event.inputs.target }}
-            - **Device:** ${{ github.event.inputs.device }}
-            - **Build Date:** $(date)
-            
-            ### Included Packages:
