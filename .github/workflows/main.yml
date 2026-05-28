@@ -1,4 +1,4 @@
-name: Build OpenWrt for Cudy TR1200 v1
+name: Build OpenWrt for Cudy TR1200 v1 (Alternative)
 
 on:
   workflow_dispatch:
@@ -12,81 +12,52 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Install build dependencies
+      - name: Setup build environment
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libncurses-dev zlib1g-dev \
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential libncurses-dev zlib1g-dev \
             gawk git gettext libssl-dev xsltproc wget unzip python3 file libelf-dev
       
-      - name: Download OpenWrt Image Builder
+      - name: Download and prepare Image Builder
         run: |
-          wget https://downloads.openwrt.org/releases/23.05.4/targets/ramips/mt76x8/openwrt-imagebuilder-23.05.4-ramips-mt76x8.Linux-x86_64.tar.xz
-          echo "Download completed"
+          wget -q https://downloads.openwrt.org/releases/23.05.4/targets/ramips/mt76x8/openwrt-imagebuilder-23.05.4-ramips-mt76x8.Linux-x86_64.tar.xz
+          mkdir -p imagebuilder
+          tar -xf openwrt-imagebuilder-*.tar.xz --strip-components=1 -C imagebuilder/
+          rm openwrt-imagebuilder-*.tar.xz
       
-      - name: Extract and setup imagebuilder
-        run: |
-          tar -xf openwrt-imagebuilder-*.tar.xz
-          
-          IMAGEBUILDER_DIR=$(find . -maxdepth 1 -type d -name "openwrt-imagebuilder-*" | head -1)
-          echo "Found imagebuilder directory: $IMAGEBUILDER_DIR"
-          
-          if [ ! -d "$IMAGEBUILDER_DIR" ]; then
-            echo "ERROR: Imagebuilder directory not found!"
-            exit 1
-          fi
-          
-          mv "$IMAGEBUILDER_DIR" imagebuilder
-          echo "Successfully renamed to imagebuilder"
-      
-      - name: Check available profiles
+      - name: List all profiles
         run: |
           cd imagebuilder
-          echo "Running make info to get available profiles..."
-          make info
-          
-          echo ""
-          echo "=== Looking for Cudy profiles ==="
-          make info | grep -i cudy || echo "No cudy profiles found!"
-          
-          echo ""
-          echo "=== Looking for TR1200 profiles ==="
-          make info | grep -i tr1200 || echo "No TR1200 profiles found!"
-          
-          echo ""
-          echo "=== All available profiles containing '1200' ==="
-          make info | grep 1200 || echo "No profiles with 1200 found!"
+          echo "All available profiles:"
+          make info | grep "^[a-z]" | head -100
       
-      - name: Get exact profile name
-        id: profile
+      - name: Build firmware with exact profile
         run: |
           cd imagebuilder
           
-          # Получаем точное имя профиля
-          PROFILE=$(make info | grep -i "tr1200" | head -1 | awk '{print $2}')
+          # Пробуем разные варианты имени профиля
+          PROFILE=""
           
-          if [ -z "$PROFILE" ]; then
-            echo "Searching for alternative profile names..."
-            # Пробуем разные варианты
-            PROFILE=$(make info | grep -E "(cudy.*1200|tr1200)" -i | head -1 | awk '{print $2}')
+          # Проверяем самый вероятный вариант
+          if make info | grep -q "^cudy_tr1200-v1:"; then
+            PROFILE="cudy_tr1200-v1"
+          elif make info | grep -q "^cudy,tr1200-v1:"; then
+            PROFILE="cudy,tr1200-v1"
+          elif make info | grep -qi "tr1200"; then
+            PROFILE=$(make info | grep -i "tr1200" | head -1 | cut -d: -f1)
           fi
           
           if [ -z "$PROFILE" ]; then
-            echo "ERROR: Could not find profile for Cudy TR1200!"
-            echo "All available profiles:"
-            make info | head -50
+            echo "ERROR: Cannot find Cudy TR1200 profile!"
+            echo "Available profiles:"
+            make info
             exit 1
           fi
           
-          echo "Found profile: $PROFILE"
-          echo "profile=$PROFILE" >> $GITHUB_OUTPUT
-      
-      - name: Build firmware
-        run: |
-          cd imagebuilder
+          echo "Using profile: $PROFILE"
           
-          echo "Building with profile: ${{ steps.profile.outputs.profile }}"
           make image \
-            PROFILE="${{ steps.profile.outputs.profile }}" \
+            PROFILE="$PROFILE" \
             PACKAGES="kmod-usb-core kmod-usb2 kmod-usb-ohci kmod-usb-net \
               kmod-usb-net-cdc-ether kmod-usb-net-rndis kmod-usb-serial \
               kmod-usb-serial-option kmod-usb-serial-wwan kmod-usb-wdm \
@@ -95,33 +66,10 @@ jobs:
               kmod-fs-ext4 kmod-fs-vfat kmod-fs-exfat block-mount \
               xray-core luci-app-xray luci luci-ssl curl wget htop" \
             BIN_DIR="${{ github.workspace }}/output"
-          
-          echo "Build completed successfully!"
-      
-      - name: Collect firmware files
-        run: |
-          echo "Collecting firmware files..."
-          mkdir -p firmware-output
-          
-          find output/ -name "*.bin" -exec cp {} firmware-output/ \; 2>/dev/null || true
-          find output/ -name "*.manifest" -exec cp {} firmware-output/ \; 2>/dev/null || true
-          
-          echo "OpenWrt Custom Build" > firmware-output/README.txt
-          echo "Device: Cudy TR1200 v1" >> firmware-output/README.txt
-          echo "Target: ramips/mt76x8" >> firmware-output/README.txt
-          echo "Build date: $(date)" >> firmware-output/README.txt
-          echo "" >> firmware-output/README.txt
-          echo "Included packages:" >> firmware-output/README.txt
-          echo "- USB modem support (CDC, RNDIS, QMI, NCM)" >> firmware-output/README.txt
-          echo "- VLESS protocol (Xray-core)" >> firmware-output/README.txt
-          echo "- USB storage support (ext4, vfat, exfat)" >> firmware-output/README.txt
-          
-          echo "Files collected:"
-          ls -la firmware-output/ || echo "WARNING: No firmware files found!"
       
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: cudy-tr1200-v1-firmware
-          path: firmware-output/
+          path: output/
           retention-days: 30
