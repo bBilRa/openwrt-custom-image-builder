@@ -1,4 +1,4 @@
-name: Build OpenWrt for Cudy TR1200 v1 (Alternative)
+name: Build OpenWrt for Cudy TR1200 v1
 
 on:
   workflow_dispatch:
@@ -25,46 +25,52 @@ jobs:
           tar -xf openwrt-imagebuilder-*.tar.xz --strip-components=1 -C imagebuilder/
           rm openwrt-imagebuilder-*.tar.xz
       
-      - name: List all profiles
+      - name: Check available space and profile
         run: |
           cd imagebuilder
-          echo "All available profiles:"
-          make info | grep "^[a-z]" | head -100
+          echo "Available profiles:"
+          make info | grep -i "cudy\|tr1200" || make info | head -20
+          
+          echo ""
+          echo "Default packages for TR1200:"
+          PROFILE=$(make info | grep -i "tr1200" | head -1 | cut -d: -f1)
+          if [ -n "$PROFILE" ]; then
+            make info | grep -A 20 "^$PROFILE:"
+          fi
       
-      - name: Build firmware with exact profile
+      - name: Build firmware - minimal
         run: |
           cd imagebuilder
           
-          # Пробуем разные варианты имени профиля
-          PROFILE=""
-          
-          # Проверяем самый вероятный вариант
-          if make info | grep -q "^cudy_tr1200-v1:"; then
-            PROFILE="cudy_tr1200-v1"
-          elif make info | grep -q "^cudy,tr1200-v1:"; then
-            PROFILE="cudy,tr1200-v1"
-          elif make info | grep -qi "tr1200"; then
-            PROFILE=$(make info | grep -i "tr1200" | head -1 | cut -d: -f1)
-          fi
-          
-          if [ -z "$PROFILE" ]; then
-            echo "ERROR: Cannot find Cudy TR1200 profile!"
-            echo "Available profiles:"
-            make info
-            exit 1
-          fi
-          
+          # Получаем имя профиля
+          PROFILE=$(make info | grep -i "tr1200" | head -1 | cut -d: -f1)
           echo "Using profile: $PROFILE"
+          
+          # Минимальный набор пакетов для USB-модема и VLESS
+          PACKAGES=""
+          
+          # USB модем - только самое необходимое
+          PACKAGES="$PACKAGES kmod-usb-core kmod-usb2 kmod-usb-ohci"
+          PACKAGES="$PACKAGES kmod-usb-net kmod-usb-net-cdc-ether kmod-usb-net-rndis"
+          PACKAGES="$PACKAGES kmod-usb-serial kmod-usb-serial-option kmod-usb-serial-wwan"
+          PACKAGES="$PACKAGES usb-modeswitch"
+          PACKAGES="$PACKAGES luci-proto-3g luci-proto-qmi luci-proto-ncm"
+          PACKAGES="$PACKAGES comgt comgt-ncm"
+          
+          # Файловые системы (только ext4 и vfat)
+          PACKAGES="$PACKAGES kmod-fs-ext4 kmod-fs-vfat block-mount"
+          
+          # Xray-core и LuCI
+          PACKAGES="$PACKAGES xray-core luci-app-xray"
+          
+          # Базовый LuCI
+          PACKAGES="$PACKAGES luci luci-ssl"
+          
+          echo "Packages to install: $PACKAGES"
           
           make image \
             PROFILE="$PROFILE" \
-            PACKAGES="kmod-usb-core kmod-usb2 kmod-usb-ohci kmod-usb-net \
-              kmod-usb-net-cdc-ether kmod-usb-net-rndis kmod-usb-serial \
-              kmod-usb-serial-option kmod-usb-serial-wwan kmod-usb-wdm \
-              usb-modeswitch comgt comgt-ncm luci-proto-3g luci-proto-qmi \
-              luci-proto-ncm luci-proto-modemmanager modemmanager \
-              kmod-fs-ext4 kmod-fs-vfat kmod-fs-exfat block-mount \
-              xray-core luci-app-xray luci luci-ssl curl wget htop" \
+            PACKAGES="$PACKAGES" \
             BIN_DIR="${{ github.workspace }}/output"
       
       - name: Upload firmware
